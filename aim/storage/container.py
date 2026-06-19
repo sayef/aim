@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING, Iterator, Tuple, Union
 
 from aim.storage import utils
-from aim.storage.utils import interfaces
 
 
 if TYPE_CHECKING:
@@ -285,5 +284,30 @@ class Container:
         ...
 
 
-class ContainerItemsIterator(interfaces.Iterator):
-    pass
+class ContainerItemsIterator:
+    """Iterator protocol base for container item iterators.
+
+    The storage backend (litewave) is pure Python and exposes no cimportable
+    extension type, so this iterator protocol is defined here directly.
+    Subclasses override ``next`` / ``get`` / ``seek*``.
+    """
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        item = self.next()
+        if item is None:
+            raise StopIteration
+        return item
+
+    def next(self):
+        return None
+
+    def get(self):
+        if self._current_value is None:
+            self._current_value = self.next()
+        return self._current_value
+
+    def skip(self):
+        self._current_value = None

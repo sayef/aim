@@ -2,10 +2,16 @@
 # cython: language_level = 3
 
 from aim.storage cimport utils
-from aim.storage.utils cimport interfaces
 
-cdef class ContainerItemsIterator(interfaces.Iterator):
-    pass
+# litewave is pure Python (SQLite + S3) and no longer
+# ships a cimportable extension type. ContainerItemsIterator therefore defines
+# the iterator protocol itself instead of extending an external Iterator.
+cdef class ContainerItemsIterator:
+    cdef object _current_value
+
+    cpdef object next(self)
+    cpdef object get(self)
+    cpdef void skip(self)
 
 cdef class Container:
     cdef __weakref__
@@ -16,7 +22,7 @@ cdef class Container:
     cpdef void set(self, bytes key, object value, store_batch = *)
     cpdef void delete_range(self, bytes begin, bytes end, store_batch = *)
 
-    cpdef ContainerItemsIterator items(self, bytes prefix = *)
+    cpdef object items(self, bytes prefix = *)
 
     cpdef bytes next_key(self, bytes key = *)
     cpdef object next_value(self, bytes key = *)

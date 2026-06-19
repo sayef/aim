@@ -1,7 +1,10 @@
 # distutils: language = c++
 # cython: language_level = 3
 
-cimport aimrocks.lib_rocksdb as interfaces
+# NOTE: litewave is a pure-Python package (SQLite + S3),
+# so it no longer ships a cimportable extension type. ``interfaces`` is imported
+# at the Python level in utils.py instead; ContainerItemsIterator is a plain
+# Python class (see container.pxd / container.py).
 
 cdef class ArrayFlagType:
     pass

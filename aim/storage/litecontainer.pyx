@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 
-import aimrocks
+import litewave
 
 from typing import Iterator, Optional, Tuple
 
@@ -22,15 +22,15 @@ BLOB_SENTINEL = b''
 BLOB_DOMAIN = b'BLOBS\xfe'
 
 
-class RocksAutoClean(AutoClean):
+class LiteAutoClean(AutoClean):
     PRIORITY = 60
 
-    def __init__(self, instance: 'RocksContainer') -> None:
+    def __init__(self, instance: 'LiteContainer') -> None:
         """
-        Prepare the `RocksContainer` for automatic cleanup.
+        Prepare the `LiteContainer` for automatic cleanup.
 
         Args:
-            instance: The `RocksContainer` instance to be cleaned up.
+            instance: The `LiteContainer` instance to be cleaned up.
         """
         super().__init__(instance)
         self._lock = None
@@ -39,7 +39,7 @@ class RocksAutoClean(AutoClean):
 
     def _close(self):
         """
-        Close the RocksDB instances, flush memtables and WAL.
+        Close the litewave database (flush + checkpoint).
         Finally, release the lock.
         """
         if self._lock is not None:
@@ -56,9 +56,9 @@ class RocksAutoClean(AutoClean):
             self._db = None
 
 
-class RocksContainer(Container):
+class LiteContainer(Container):
     """
-    TODO Rocks-specific docs
+    TODO litewave-backed container
     """
     def __init__(
         self,
@@ -67,7 +67,7 @@ class RocksContainer(Container):
         wait_if_busy: bool = False,
         **extra_options
     ) -> None:
-        self._resources: RocksAutoClean = None
+        self._resources: LiteAutoClean = None
 
         self.path = Path(path)
         self.read_only = read_only
@@ -92,16 +92,16 @@ class RocksContainer(Container):
         )
         self._extra_opts = extra_options
         # opts.allow_concurrent_memtable_write = False
-        # opts.memtable_factory = aimrocks.VectorMemtableFactory()
-        # opts.table_factory = aimrocks.PlainTableFactory()
-        # opts.table_factory = aimrocks.BlockBasedTableFactory(block_cache=aimrocks.LRUCache(67108864))
+        # opts.memtable_factory = litewave.VectorMemtableFactory()
+        # opts.table_factory = litewave.PlainTableFactory()
+        # opts.table_factory = litewave.BlockBasedTableFactory(block_cache=litewave.LRUCache(67108864))
         # opts.write_buffer_size = 67108864
         # opts.arena_block_size = 67108864
 
         self._wait_if_busy = wait_if_busy  # TODO implement
         self._lock_path: Optional[Path] = None
 
-        self._resources = RocksAutoClean(self)
+        self._resources = LiteAutoClean(self)
 
         progress_dir = self.path.parent.parent / 'progress'
         self._progress_path = progress_dir / self.path.name
@@ -137,11 +137,11 @@ class RocksContainer(Container):
         self._resources._lock = value
 
     @property
-    def db(self) -> aimrocks.DB:
+    def db(self) -> litewave.DB:
         if self._db is not None:
             return self._db
 
-        logger.debug(f'opening {self.path} as aimrocks db')
+        logger.debug(f'opening {self.path} as litewave db')
         if not self.read_only:
             lock_path = prepare_lock_path(self.path)
             self._lock_path = lock_path
@@ -152,8 +152,8 @@ class RocksContainer(Container):
         elif not self._extra_opts.get('skip_read_optimization', False):
             self.optimize_for_read()
 
-        self._db = aimrocks.DB(str(self.path),
-                               aimrocks.Options(**self._db_opts),
+        self._db = litewave.DB(str(self.path),
+                               litewave.Options(**self._db_opts),
                                read_only=self.read_only)
 
         return self._db
@@ -246,7 +246,7 @@ class RocksContainer(Container):
         key: ContainerKey,
         value: ContainerValue,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         target.put(key, value)
 
@@ -255,7 +255,7 @@ class RocksContainer(Container):
         key: ContainerKey,
         value: BLOB,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         self._put(key=BLOB_DOMAIN + key,
                   value=bytes(value),
@@ -265,7 +265,7 @@ class RocksContainer(Container):
         self,
         key: ContainerKey,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         target.delete(key)
 
@@ -273,7 +273,7 @@ class RocksContainer(Container):
         self,
         key: ContainerKey,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         self._delete(key=BLOB_DOMAIN + key,
                      target=target)
@@ -283,7 +283,7 @@ class RocksContainer(Container):
         begin: ContainerKey,
         end: ContainerKey,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         target.delete_range(begin, end)
 
@@ -292,7 +292,7 @@ class RocksContainer(Container):
         begin: ContainerKey,
         end: ContainerKey,
         *,
-        target: aimrocks.WriteBatch
+        target: litewave.WriteBatch
     ):
         self._delete_range(BLOB_DOMAIN + begin,
                            BLOB_DOMAIN + end,
@@ -302,7 +302,7 @@ class RocksContainer(Container):
         self,
         key: ContainerKey,
         value: ContainerValue,
-        store_batch: aimrocks.WriteBatch = None
+        store_batch: litewave.WriteBatch = None
     ):
         """Set a value for given key, optionally store in a batch.
 
@@ -310,7 +310,7 @@ class RocksContainer(Container):
         to the collection immediately, the operation is stored in a batch in
         order to be executed in a whole with other write operations.
 
-        See :obj:`RocksContainer.batch` and :obj:`RocksContainer.commit` for
+        See :obj:`LiteContainer.batch` and :obj:`LiteContainer.commit` for
         more details.
         """
         target = self.batch() if store_batch is None else store_batch
@@ -337,7 +337,7 @@ class RocksContainer(Container):
         self,
         key: ContainerKey,
         *,
-        store_batch: aimrocks.WriteBatch = None
+        store_batch: litewave.WriteBatch = None
     ):
         """Delete a key-value record by the given key,
         optionally store in a batch.
@@ -346,7 +346,7 @@ class RocksContainer(Container):
         to the collection immediately, the operation is stored in a batch in
         order to be executed in a whole with other write operations.
 
-        See :obj:`RocksContainer.batch` and :obj:`RocksContainer.commit` for
+        See :obj:`LiteContainer.batch` and :obj:`LiteContainer.commit` for
         more details.
         """
         target = self.batch() if store_batch is None else store_batch
@@ -368,7 +368,7 @@ class RocksContainer(Container):
         self,
         begin: ContainerKey,
         end: ContainerKey,
-        store_batch: aimrocks.WriteBatch = None
+        store_batch: litewave.WriteBatch = None
     ):
         """Delete all the records in the given `[begin, end)` key range,
         optionally store in a batch.
@@ -377,7 +377,7 @@ class RocksContainer(Container):
         to the collection immediately, the operation is stored in a batch in
         order to be executed in a whole with other write operations.
 
-        See :obj:`RocksContainer.batch` and :obj:`RocksContainer.commit` for
+        See :obj:`LiteContainer.batch` and :obj:`LiteContainer.commit` for
         more details.
         """
         target = self.batch() if store_batch is None else store_batch
@@ -409,7 +409,7 @@ class RocksContainer(Container):
         Args:
             prefix (:obj:`bytes`): the prefix that defines the key range
         """
-        return RocksContainerItemsIterator(container=self, prefix=prefix)
+        return LiteContainerItemsIterator(container=self, prefix=prefix)
 
     def walk(
         self,
@@ -470,24 +470,24 @@ class RocksContainer(Container):
 
     def batch(
         self
-    ) -> aimrocks.WriteBatch:
+    ) -> litewave.WriteBatch:
         """Creates a new batch object to store operations in before executing
-        using :obj:`RocksContainer.commit`.
+        using :obj:`LiteContainer.commit`.
 
-        The operations :obj:`RocksContainer.set`, :obj:`RocksContainer.delete`,
-        :obj:`RocksContainer.delete_range` are supported.
+        The operations :obj:`LiteContainer.set`, :obj:`LiteContainer.delete`,
+        :obj:`LiteContainer.delete_range` are supported.
 
-        See more at :obj:`RocksContainer.commit`
+        See more at :obj:`LiteContainer.commit`
         """
-        return aimrocks.WriteBatch()
+        return litewave.WriteBatch()
 
     def commit(
         self,
-        batch: aimrocks.WriteBatch
+        batch: litewave.WriteBatch
     ):
         """Execute the accumulated write operations in the given `batch`.
 
-        The `RocksContainer` features atomic writes for batches.
+        The `LiteContainer` features atomic writes for batches.
         """
         self.db.write(batch)
 
@@ -535,15 +535,15 @@ class RocksContainer(Container):
 @exception_resistant(silent=True)
 def optimize_db_for_read(path: Path, options: dict, run_compactions: bool = False):
     """
-    This function will try to open rocksdb db in write mode and force WAL files recovery. Once done the underlying
+    This function will try to open litewave db in write mode and force WAL files recovery. Once done the underlying
     db will contain .sst files only which will significantly reduce further open and read operations. Further
     optimizations can be done by running compactions but this is a costly operation to be performed online.
 
 
     Args:
-        path (:obj:`Path`): Path to rocksdb.
-        options (:obj:`dict`): options to be passed to aimrocks.DB object __init__.
-        run_compactions (:obj:`bool`, optional): Flag used to run rocksdb range compactions. False by default.
+        path (:obj:`Path`): Path to litewave.
+        options (:obj:`dict`): options to be passed to litewave.DB object __init__.
+        run_compactions (:obj:`bool`, optional): Flag used to run litewave range compactions. False by default.
     """
 
     def non_empty_wal():
@@ -556,7 +556,7 @@ def optimize_db_for_read(path: Path, options: dict, run_compactions: bool = Fals
         lock_path = prepare_lock_path(path)
 
         with SoftFileLock(lock_path, timeout=0):
-            wdb = aimrocks.DB(str(path), aimrocks.Options(**options), read_only=False)
+            wdb = litewave.DB(str(path), litewave.Options(**options), read_only=False)
             wdb.flush()
             wdb.flush_wal()
             if run_compactions:
@@ -566,13 +566,13 @@ def optimize_db_for_read(path: Path, options: dict, run_compactions: bool = Fals
 
 def prepare_lock_path(path: Path):
     """
-    This function creates the locks directory (if needed) and returns a LOCK file path for given rocksdb `path`.
+    This function creates the locks directory (if needed) and returns a LOCK file path for given litewave `path`.
 
     Args:
-        path (:obj:`Path`): Path to rocksdb.
+        path (:obj:`Path`): Path to litewave.
 
     Returns:
-        path (:obj:`Path`) to lock file for given rocksdb.
+        path (:obj:`Path`) to lock file for given litewave.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     locks_dir = path.parent.parent / 'locks'
@@ -580,10 +580,10 @@ def prepare_lock_path(path: Path):
     return locks_dir / path.name
 
 
-class RocksContainerItemsIterator(ContainerItemsIterator):
+class LiteContainerItemsIterator(ContainerItemsIterator):
     def __init__(
         self,
-        container: RocksContainer,
+        container: LiteContainer,
         prefix: ContainerKey = b''
     ):
         self.container = container

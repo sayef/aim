@@ -3,12 +3,11 @@ import sys
 
 from shutil import rmtree
 
-from aimrocks import lib_utils
 from Cython.Build import cythonize
 from setuptools import Command, Extension, find_packages, setup
 
 
-# TODO This `setup.py` assumes that `Cython` and `aimrocks` are installed.
+# TODO This `setup.py` assumes that `Cython` is installed.
 # This is okay for now as users are expected to install `aim` from wheels.
 
 version_file = 'aim/VERSION'
@@ -49,14 +48,14 @@ readme_text = open('/'.join((here, readme_file)), encoding='utf-8').read()
 LONG_DESCRIPTION = readme_text.strip()
 
 SETUP_REQUIRED = [
-    'Cython==3.0.12',
+    'Cython>=3.1',
 ]
 
 # What packages are required for this module to be executed?
 REQUIRED = [
     f'aim-ui=={__version__}',
     'aimrecords==0.0.7',
-    'aimrocks @ git+https://github.com/sayef/aimrocks@master',
+    'litewave @ git+https://github.com/sayef/litewave.git',
     'cachetools>=4.0.0',
     'click>=7.0',
     'cryptography>=3.0',
@@ -128,9 +127,11 @@ class UploadCommand(Command):
         sys.exit()
 
 
-INCLUDE_DIRS = [lib_utils.get_include_dir()]
-LIB_DIRS = [lib_utils.get_lib_dir()]
-LIBS = lib_utils.get_libs()
+# aim's Cython extensions link against no native libraries (the storage backend
+# is pure Python), so these are empty.
+INCLUDE_DIRS = []
+LIB_DIRS = []
+LIBS = []
 COMPILE_ARGS = ['-std=c++11', '-O3', '-Wall', '-Wextra', '-Wconversion', '-fno-strict-aliasing', '-fno-rtti', '-fPIC']
 CYTHON_SCRITPS = [
     ('aim.storage.hashing.c_hash', 'aim/storage/hashing/c_hash.pyx'),
@@ -140,7 +141,7 @@ CYTHON_SCRITPS = [
     ('aim.storage.encoding.encoding', 'aim/storage/encoding/encoding.pyx'),
     ('aim.storage.encoding', 'aim/storage/encoding/__init__.py'),
     ('aim.storage.treeutils', 'aim/storage/treeutils.pyx'),
-    ('aim.storage.rockscontainer', 'aim/storage/rockscontainer.pyx'),
+    ('aim.storage.litecontainer', 'aim/storage/litecontainer.pyx'),
     ('aim.storage.union', 'aim/storage/union.pyx'),
     ('aim.storage.arrayview', 'aim/storage/arrayview.py'),
     ('aim.storage.treearrayview', 'aim/storage/treearrayview.py'),

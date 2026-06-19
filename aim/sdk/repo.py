@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
 from weakref import WeakValueDictionary
 
-import aimrocks.errors
+import litewave.errors
 
 from aim.ext.cleanup import AutoClean
 from aim.ext.sshfs.utils import mount_remote_repo, unmount_remote_repo
@@ -30,11 +30,11 @@ from aim.sdk.utils import clean_repo_path, search_aim_repo
 from aim.storage.container import Container
 from aim.storage.lock_proxy import ProxyLock
 from aim.storage.locking import SoftFileLock
-from aim.storage.rockscontainer import RocksContainer
+from aim.storage.litecontainer import LiteContainer
 from aim.storage.structured.db import DB
 from aim.storage.structured.proxy import StructuredRunProxy
 from aim.storage.treeviewproxy import ProxyTree
-from aim.storage.union import RocksUnionContainer
+from aim.storage.union import LiteUnionContainer
 from cachetools.func import ttl_cache
 
 
@@ -135,7 +135,7 @@ class Repo:
 
             # Make sure meta index db is created
             path = os.path.join(self.path, 'meta', 'index')
-            RocksContainer(path, read_only=False)
+            LiteContainer(path, read_only=False)
 
         if not self.is_remote_repo and not os.path.exists(self.path):
             if self._mount_root:
@@ -290,7 +290,7 @@ class Repo:
         container = self.container_pool.get(container_config)
         if container is None:
             path = os.path.join(self.path, name)
-            container = RocksContainer(path, read_only=False, timeout=timeout)
+            container = LiteContainer(path, read_only=False, timeout=timeout)
             self.container_pool[container_config] = container
 
         return container
@@ -310,13 +310,13 @@ class Repo:
             if sub is None:
                 try:
                     path = os.path.join(self.path, name, 'index')
-                    container = RocksContainer(path, read_only=True, skip_read_optimization=skip_read_optimization)
-                except aimrocks.errors.RocksIOError:
+                    container = LiteContainer(path, read_only=True, skip_read_optimization=skip_read_optimization)
+                except litewave.errors.StoreIOError:
                     path = os.path.join(self.path, name)
-                    container = RocksUnionContainer(path, read_only=True)
+                    container = LiteUnionContainer(path, read_only=True)
             else:
                 path = os.path.join(self.path, name, 'chunks', sub)
-                container = RocksContainer(path, read_only=read_only, skip_read_optimization=skip_read_optimization)
+                container = LiteContainer(path, read_only=read_only, skip_read_optimization=skip_read_optimization)
             self.container_pool[container_config] = container
         return container
 
@@ -399,7 +399,7 @@ class Repo:
         def get_run_hash_from_prefix(prefix: bytes):
             return decode_path(prefix)[-1]
 
-        container = RocksUnionContainer(os.path.join(self.path, 'meta'), read_only=True)
+        container = LiteUnionContainer(os.path.join(self.path, 'meta'), read_only=True)
         return list(map(get_run_hash_from_prefix, container.corrupted_dbs))
 
     def _active_run_hashes(self) -> Set[str]:
@@ -809,7 +809,7 @@ class Repo:
         index_tree = self._get_index_container('meta', timeout=0).tree()
         del index_tree.subtree(('meta', 'chunks'))[run_hash]
 
-        # delete rocksdb containers data
+        # delete litewave container data
         sub_dirs = ('chunks', 'progress', 'locks')
         for sub_dir in sub_dirs:
             meta_path = os.path.join(self.path, 'meta', sub_dir, run_hash)
@@ -959,7 +959,7 @@ class Repo:
         import pytz
 
         def optimize_container(path, extra_options):
-            rc = RocksContainer(path, read_only=True, **extra_options)
+            rc = LiteContainer(path, read_only=True, **extra_options)
             rc.optimize_for_read()
 
         if self.is_remote_repo:
@@ -978,7 +978,7 @@ class Repo:
             if not meta_run_tree.get('end_time'):
                 meta_run_tree['end_time'] = datetime.datetime.now(pytz.utc).timestamp()
 
-            # Run rocksdb optimizations if container locks are removed
+            # Run read optimizations if container locks are removed
             meta_db_path = os.path.join(self.path, 'meta', 'chunks', run_hash)
             seqs_db_path = os.path.join(self.path, 'seqs', 'chunks', run_hash)
             optimize_container(meta_db_path, extra_options={'compaction': True})

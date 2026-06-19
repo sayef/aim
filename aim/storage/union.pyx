@@ -3,7 +3,7 @@ import logging
 import os
 import shutil
 
-import aimrocks
+import litewave
 
 import cachetools.func
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from aim.storage.encoding import encode_path
 from aim.storage.container import Container, ContainerItemsIterator
 from aim.storage.prefixview import PrefixView
-from aim.storage.rockscontainer import RocksContainer, optimize_db_for_read
+from aim.storage.litecontainer import LiteContainer, optimize_db_for_read
 
 from typing import Dict, List, NamedTuple, Tuple, Set
 
@@ -25,11 +25,11 @@ class Racer(NamedTuple):
     priority: int
     value: bytes
     prefix: bytes
-    iterator: 'aimrocks.ItemsIterator'
+    iterator: 'litewave.ItemsIterator'
 
 
 class ItemsIterator(ContainerItemsIterator):
-    def __init__(self, dbs: Dict[bytes, "aimrocks.DB"], corrupted_dbs: Set[bytes], *args, **kwargs):
+    def __init__(self, dbs: Dict[bytes, "litewave.DB"], corrupted_dbs: Set[bytes], *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
         self._iterators = {}
@@ -53,7 +53,7 @@ class ItemsIterator(ContainerItemsIterator):
         for prefix, iterator in self._iterators.items():
             try:
                 iterator.seek_to_first()
-            except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+            except (litewave.errors.StoreIOError, litewave.errors.Corruption):
                 logger.debug(f'Detected corrupted db chunk \'{prefix}\'.')
                 corrupted_dbs.add(prefix)
         self._corrupted_dbs.update(corrupted_dbs)
@@ -67,7 +67,7 @@ class ItemsIterator(ContainerItemsIterator):
         for prefix, iterator in self._iterators.items():
             try:
                 iterator.seek_to_last()
-            except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+            except (litewave.errors.StoreIOError, litewave.errors.Corruption):
                 logger.debug(f'Detected corrupted db chunk \'{prefix}\'.')
                 corrupted_dbs.add(prefix)
         self._corrupted_dbs.update(corrupted_dbs)
@@ -81,7 +81,7 @@ class ItemsIterator(ContainerItemsIterator):
         for prefix, iterator in self._iterators.items():
             try:
                 iterator.seek(key)
-            except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+            except (litewave.errors.StoreIOError, litewave.errors.Corruption):
                 logger.debug(f'Detected corrupted db chunk \'{prefix}\'.')
                 corrupted_dbs.add(prefix)
         self._corrupted_dbs.update(corrupted_dbs)
@@ -95,7 +95,7 @@ class ItemsIterator(ContainerItemsIterator):
         for prefix, iterator in self._iterators.items():
             try:
                 iterator.seek_for_prev(key)
-            except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+            except (litewave.errors.StoreIOError, litewave.errors.Corruption):
                 logger.debug(f'Detected corrupted db chunk \'{prefix}\'.')
                 corrupted_dbs.add(prefix)
         self._corrupted_dbs.update(corrupted_dbs)
@@ -191,20 +191,20 @@ class DB(object):
         self.db_path = db_path
         self.db_name = db_name
         self.opts = opts
-        self._dbs: Dict[bytes, aimrocks.DB] = dict()
+        self._dbs: Dict[bytes, litewave.DB] = dict()
         self._corrupted_dbs: Set[bytes] = set()
 
     def _get_db(
         self,
         prefix: bytes,
         path: str,
-        cache: Dict[bytes, aimrocks.DB],
-        store: Dict[bytes, aimrocks.DB] = None,
+        cache: Dict[bytes, litewave.DB],
+        store: Dict[bytes, litewave.DB] = None,
     ):
         db = cache.get(prefix)
         if db is None:
             optimize_db_for_read(Path(path), self.opts)
-            db = aimrocks.DB(path, opts=aimrocks.Options(**self.opts), read_only=True)
+            db = litewave.DB(path, opts=litewave.Options(**self.opts), read_only=True)
         if store is not None:
             store[prefix] = db
         return db
@@ -225,13 +225,13 @@ class DB(object):
             index_db = self._get_db(index_prefix, index_path, self._dbs)
             # do a random read to check if index db is corrupted or not
             index_db.get(index_prefix)
-        except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+        except (litewave.errors.StoreIOError, litewave.errors.Corruption):
             # delete index db and mark as corrupted
             corruption_marker = Path(index_path) / '.corrupted'
             if not corruption_marker.exists():
                 # discard the case when index db does not exist
-                rocks_current_path = Path(index_path) / 'CURRENT'
-                if rocks_current_path.exists():
+                db_file_path = Path(index_path) / 'data.sqlite'
+                if db_file_path.exists():
                     logger.warning('Corrupted index db. Deleting the index db to avoid errors. '
                                    'Please run `aim storage reindex command to restore optimal performance.`')
                     shutil.rmtree(index_path)
@@ -242,14 +242,14 @@ class DB(object):
             index_db = None
             logger.info('No index was detected')
 
-        new_dbs: Dict[bytes, aimrocks.DB] = {}
+        new_dbs: Dict[bytes, litewave.DB] = {}
         db_dir = os.path.join(self.db_path, self.db_name, 'chunks')
         for prefix in self._list_dir(db_dir):
             path = os.path.join(self.db_path, self.db_name, "chunks", prefix)
             prefix = encode_path((self.db_name, "chunks", prefix))
             try:
                 self._get_db(prefix, path, self._dbs, new_dbs)
-            except (aimrocks.errors.RocksIOError, aimrocks.errors.Corruption):
+            except (litewave.errors.StoreIOError, litewave.errors.Corruption):
                 logger.debug(f'Detected corrupted db chunk \'{prefix}\'.')
                 self._corrupted_dbs.add(prefix)
 
@@ -284,19 +284,19 @@ class DB(object):
         return ValuesIterator(self.dbs, self._corrupted_dbs, *args, **kwargs)
 
 
-class RocksUnionContainer(RocksContainer):
+class LiteUnionContainer(LiteContainer):
 
     def __init__(self, *args, **kwargs):
         return super().__init__(*args, **kwargs)
 
     @property
-    def db(self) -> aimrocks.DB:
+    def db(self) -> litewave.DB:
         assert self.read_only
 
         if self._db is not None:
             return self._db
         try:
-            logger.debug(f'opening {self.path} as aimrocks db')
+            logger.debug(f'opening {self.path} as litewave db')
             path = Path(self.path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -319,18 +319,18 @@ class RocksUnionContainer(RocksContainer):
     ) -> 'Container':
         container = self
         if prefix and prefix in self.db.dbs:
-            container = RocksUnionSubContainer(container=self, domain=prefix)
+            container = LiteUnionSubContainer(container=self, domain=prefix)
         return PrefixView(prefix=prefix,
                           container=container)
 
 
-class RocksUnionSubContainer(RocksContainer):
-    def __init__(self, container: 'RocksUnionContainer', domain: bytes):
+class LiteUnionSubContainer(LiteContainer):
+    def __init__(self, container: 'LiteUnionContainer', domain: bytes):
         self._parent = container
         self.domain = domain
 
     @property
-    def db(self) -> aimrocks.DB:
+    def db(self) -> litewave.DB:
         db: DB = self._parent.db
         return db.dbs.get(self.domain, db)
 
