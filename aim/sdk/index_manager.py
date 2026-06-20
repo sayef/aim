@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Dict
 
-import litewave.errors
+from aim.litewave import errors as litewave_errors
 
 from aim.sdk.repo import Repo
 from watchdog.events import FileSystemEventHandler
@@ -194,7 +194,7 @@ class RepoIndexManager:
                 logger.debug(f'Indexing thread detected finished run: {run_hash}. Stopping monitoring...')
                 self._stop_monitoring_chunk(run_hash)
 
-        except (litewave.errors.StoreIOError, litewave.errors.Corruption):
+        except (litewave_errors.StoreIOError, litewave_errors.Corruption):
             logger.warning(f'Indexing thread detected corrupted run: {run_hash}. Skipping.')
             self._corrupted_runs.add(run_hash)
         return True

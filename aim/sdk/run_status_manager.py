@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Iterable
 
-import litewave.errors
+from aim.litewave import errors as litewave_errors
 import pytz
 
 from aim import Repo
@@ -91,5 +91,5 @@ class RunStatusManager:
                 meta_run_tree['end_time'] = datetime.datetime.now(pytz.utc).timestamp()
             progress_path = self.progress_dir / run_hash
             progress_path.unlink(missing_ok=True)
-        except (litewave.errors.StoreIOError, litewave.errors.Corruption):
+        except (litewave_errors.StoreIOError, litewave_errors.Corruption):
             self._corrupted_runs.add(run_hash)

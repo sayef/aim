@@ -1,6 +1,5 @@
 # Dependencies for the litewave-backend CI (excludes aim-ui, which is only
 # needed for the web UI and pulls a large pre-built asset bundle).
-litewave @ git+https://github.com/sayef/litewave.git
 Cython>=3.1
 aimrecords==0.0.7
 cachetools>=4.0.0

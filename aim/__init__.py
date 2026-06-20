@@ -1,4 +1,4 @@
-import litewave
+import aim.litewave as litewave
 
 from aim.cli.manager.manager import run_process
 from aim.ext.notebook.notebook import load_ipython_extension

@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
 from weakref import WeakValueDictionary
 
-import litewave.errors
+from aim.litewave import errors as litewave_errors
 
 from aim.ext.cleanup import AutoClean
 from aim.ext.sshfs.utils import mount_remote_repo, unmount_remote_repo
@@ -311,7 +311,7 @@ class Repo:
                 try:
                     path = os.path.join(self.path, name, 'index')
                     container = LiteContainer(path, read_only=True, skip_read_optimization=skip_read_optimization)
-                except litewave.errors.StoreIOError:
+                except litewave_errors.StoreIOError:
                     path = os.path.join(self.path, name)
                     container = LiteUnionContainer(path, read_only=True)
             else:
