@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 
-import litewave
+from aim import litewave
 
 from typing import Iterator, Optional, Tuple
 
