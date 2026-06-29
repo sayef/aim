@@ -11,13 +11,16 @@ Pure Python -- no native build, no Cython, no third-party storage engine.
 
 from typing import Dict, List, Optional, Tuple
 
-from ._config import config
+from ._config import S3Config, ActiveConfig, active_config, resolve_config
 from ._local import LocalStore
 
 __all__ = [
     'Options',
     'WriteBatch',
     'DB',
+    'S3Config',
+    'ActiveConfig',
+    'active_config',
     'Iterator',
     'BaseIterator',
     'KeysIterator',
@@ -120,6 +123,7 @@ class DB:
         opts: Optional[Options] = None,
         column_families: Optional[Dict] = None,
         read_only: bool = False,
+        config: Optional[S3Config] = None,
         **kwargs,
     ):
         self.db_path = db_path
@@ -135,12 +139,14 @@ class DB:
             create_if_missing=getattr(self.opts, 'create_if_missing', True),
         )
 
-        self._s3 = None
-        if config.enabled:
-            from ._s3 import S3SyncBackend
-            self._s3 = S3SyncBackend(self._store, db_path, config, read_only=read_only)
+        # Precedence: explicit arg -> shared active_config -> environment ->
+        # local-only store (when no bucket is configured anywhere).
+        cfg = resolve_config(config)
 
-    # ----- point operations ---------------------------------------------
+        self._s3 = None
+        if cfg.enabled:
+            from ._s3 import S3SyncBackend
+            self._s3 = S3SyncBackend(self._store, db_path, cfg, read_only=read_only)
 
     def put(self, key: bytes, value: bytes, sync: bool = False, disable_wal: bool = False,
             column_family=None):

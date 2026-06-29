@@ -1,13 +1,23 @@
 """
-Configuration and backend selection for the litewave engine.
+Configuration for the litewave engine.
 
-All configuration is read from environment variables. The S3 backend is enabled
-automatically when ``LITEWAVE_S3_BUCKET`` is set; otherwise litewave behaves as a
-purely local SQLite key-value store (no network, no background sync).
+:class:`S3Config` is a plain, self-contained value object. Clients construct it
+themselves and hand it to :class:`litewave.DB` (or whatever wraps it). There is
+no process-wide singleton and nothing to ``configure()`` globally:
+
+    from aim.litewave import DB, S3Config
+
+    db = DB(path, config=S3Config(bucket="my-bucket", prefix="aim/"))
+
+When a ``DB`` is opened without a ``config`` it falls back to
+:meth:`S3Config.from_env`, which reads the ``LITEWAVE_*`` environment variables;
+with no bucket from either source litewave is a purely local SQLite key-value
+store (no network, no background sync).
 """
 
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -39,21 +49,40 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+@dataclass
 class S3Config:
-    """Resolved S3 configuration, derived once from the environment."""
+    """litewave configuration value object.
 
-    def __init__(self):
-        self.bucket = _env('LITEWAVE_S3_BUCKET')
-        self.prefix = _env('LITEWAVE_S3_PREFIX', 'litewave/')
-        self.region = _env('LITEWAVE_S3_REGION')
-        self.endpoint_url = _env('LITEWAVE_S3_ENDPOINT')
-        self.local_root = _env('LITEWAVE_LOCAL_ROOT')
-        self.flush_interval = _env_float('LITEWAVE_FLUSH_INTERVAL_SEC', 5.0)
-        self.compact_threshold = _env_int('LITEWAVE_SEGMENT_COMPACT_THRESHOLD', 16)
+    Construct it directly to drive S3 sync from code, or call
+    :meth:`from_env` to build one from the ``LITEWAVE_*`` environment variables.
+    With no ``bucket`` set, litewave runs purely locally.
+    """
 
+    bucket: Optional[str] = None
+    prefix: str = 'litewave/'
+    region: Optional[str] = None
+    endpoint_url: Optional[str] = None
+    local_root: Optional[str] = None
+    flush_interval: float = 5.0
+    compact_threshold: int = 16
+
+    def __post_init__(self):
         # Normalise prefix to a single trailing slash, no leading slash.
         prefix = (self.prefix or '').strip('/')
         self.prefix = (prefix + '/') if prefix else ''
+
+    @classmethod
+    def from_env(cls) -> 'S3Config':
+        """Build a config from the ``LITEWAVE_*`` environment variables."""
+        return cls(
+            bucket=_env('LITEWAVE_S3_BUCKET'),
+            prefix=_env('LITEWAVE_S3_PREFIX', 'litewave/'),
+            region=_env('LITEWAVE_S3_REGION'),
+            endpoint_url=_env('LITEWAVE_S3_ENDPOINT'),
+            local_root=_env('LITEWAVE_LOCAL_ROOT'),
+            flush_interval=_env_float('LITEWAVE_FLUSH_INTERVAL_SEC', 5.0),
+            compact_threshold=_env_int('LITEWAVE_SEGMENT_COMPACT_THRESHOLD', 16),
+        )
 
     @property
     def enabled(self) -> bool:
@@ -71,8 +100,8 @@ class S3Config:
         """Map a local DB path to its S3 key prefix (the per-DB tree root).
 
         The tree mirrors the local directory structure relative to
-        ``LITEWAVE_LOCAL_ROOT``. When the root is not configured we auto-detect
-        the nearest ``.aim`` ancestor and root at it, so the ``.aim`` segment is
+        ``local_root``. When the root is not configured we auto-detect the
+        nearest ``.aim`` ancestor and root at it, so the ``.aim`` segment is
         stripped from the S3 keys (e.g. local ``<repo>/.aim/meta/chunks/<id>``
         maps to ``<prefix>meta/chunks/<id>``). If neither applies, we fall back
         to a stable hash of the absolute path so distinct DBs never collide.
@@ -103,6 +132,45 @@ class S3Config:
         return None
 
 
-# A single resolved configuration per process. litewave is reconfigured by
-# re-importing in a fresh process, matching the lifecycle of CLI/run processes.
-config = S3Config()
+class ActiveConfig:
+    """Process-wide default :class:`S3Config`.
+
+    A small, explicit holder for components that do not create the ``DB``
+    directly -- notably ``aim``, which opens DBs deep in its storage layer with
+    no way to pass a config down. Set it once at application/process startup::
+
+        from aim.litewave import S3Config, active_config
+        active_config.set(S3Config(bucket="my-bucket", prefix="aim/"))
+
+    A ``DB`` opened without an explicit ``config=`` argument falls back to this
+    holder, then to :meth:`S3Config.from_env`, then to a local-only store.
+    """
+
+    def __init__(self):
+        self._config: Optional[S3Config] = None
+
+    def set(self, config: Optional[S3Config]) -> None:
+        self._config = config
+
+    def get(self) -> Optional[S3Config]:
+        return self._config
+
+    def clear(self) -> None:
+        self._config = None
+
+
+# The single shared holder. Mutated via ``active_config.set(...)``.
+active_config = ActiveConfig()
+
+
+def resolve_config(config: Optional[S3Config] = None) -> S3Config:
+    """Resolve the config a ``DB`` should use, honouring the precedence:
+
+    explicit argument -> shared :data:`active_config` -> environment -> local-only.
+    """
+    if config is not None:
+        return config
+    shared = active_config.get()
+    if shared is not None:
+        return shared
+    return S3Config.from_env()
