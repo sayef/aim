@@ -19,6 +19,7 @@ Segments use a compact length-prefixed binary format (no temp files).
 
 import json
 import logging
+import os
 import struct
 import threading
 import time
@@ -92,6 +93,45 @@ def deserialize_segment(
         return rows, ranges
     except (ValueError, struct.error) as exc:
         raise errors.Corruption(f'corrupt segment: {exc}') from exc
+
+
+def list_run_hashes(config: S3Config, aim_path: str) -> List[str]:
+    """Return the run hashes that exist under *config*'s S3 tree for *aim_path*.
+
+    ``aim_path`` is the local ``.aim`` directory (e.g. ``/home/user/project/.aim``).
+    The S3 tree layout mirrors the local directory relative to the resolved root::
+
+        <s3_root_for(aim_path/meta/chunks/sentinel)>/../  (one level up per hash)
+
+    Concretely, we derive the S3 prefix by mapping the known ``meta/chunks``
+    path through ``s3_root_for``, strip the sentinel component, and list with a
+    ``/`` delimiter to get the immediate child prefixes (one per run hash).
+    """
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover
+        raise errors.StoreIOError('boto3 is not installed') from exc
+
+    s3 = boto3.client('s3', **config.boto_client_kwargs())
+    bucket = config.bucket
+
+    # Derive the S3 prefix for meta/chunks by mapping a sentinel path through
+    # the same s3_root_for logic that DB uses, then stripping the sentinel.
+    sentinel = os.path.join(aim_path, 'meta', 'chunks', '__sentinel__')
+    sentinel_s3 = config.s3_root_for(sentinel)
+    # sentinel_s3 ends with "meta/chunks/__sentinel__" or similar; strip it.
+    search_prefix = sentinel_s3[: sentinel_s3.rfind('/__sentinel__') + 1]  # up to and incl. trailing /
+
+    hashes: List[str] = []
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix, Delimiter='/'):
+        for common_prefix in page.get('CommonPrefixes', []):
+            tail = common_prefix['Prefix'][len(search_prefix):]
+            run_hash = tail.rstrip('/')
+            if run_hash and run_hash != '__sentinel__':
+                hashes.append(run_hash)
+
+    return hashes
 
 
 class S3SyncBackend:

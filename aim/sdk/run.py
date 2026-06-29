@@ -115,6 +115,24 @@ class BasicRunAutoClean(AutoClean['BasicRun']):
 
 # TODO: [AT] generate automatically based on ModelMappedRun
 class StructuredRunMixin:
+    # Key prefix in the litewave meta tree where structured props are mirrored.
+    _PROPS_KEY = '__props__'
+
+    def _mirror_prop(self, key: str, value):
+        """Write a structured DB prop into the litewave meta tree.
+
+        This makes props (name, experiment, tags, etc.) available during
+        ``aim init --sync-from`` to reconstruct run_metadata.sqlite from S3
+        without a separate file sync.  Silently no-ops when read-only or when
+        the meta tree is not yet available (e.g. during __init__ before props).
+        """
+        if getattr(self, 'read_only', True):
+            return
+        try:
+            self.meta_run_tree[self._PROPS_KEY, key] = value
+        except Exception:
+            pass
+
     @property
     def name(self):
         """Run name, set by user.
@@ -128,6 +146,7 @@ class StructuredRunMixin:
     @name.setter
     def name(self, value):
         self.props.name = value
+        self._mirror_prop('name', value)
 
     @property
     def description(self):
@@ -142,6 +161,7 @@ class StructuredRunMixin:
     @description.setter
     def description(self, value):
         self.props.description = value
+        self._mirror_prop('description', value)
 
     @property
     def archived(self):
@@ -156,6 +176,7 @@ class StructuredRunMixin:
     @archived.setter
     def archived(self, value):
         self.props.archived = value
+        self._mirror_prop('archived', value)
 
     @property
     def creation_time(self):
@@ -230,6 +251,7 @@ class StructuredRunMixin:
     @experiment.setter
     def experiment(self, value):
         self.props.experiment = value
+        self._mirror_prop('experiment', value)
 
     @property
     def tags(self):
@@ -245,7 +267,9 @@ class StructuredRunMixin:
         Args:
             value (:obj:`str`): Tag to add.
         """
-        return self.props.add_tag(value)
+        result = self.props.add_tag(value)
+        self._mirror_prop('tags', self.props.tags)
+        return result
 
     def remove_tag(self, tag_name):
         """Remove run tag.
@@ -253,7 +277,9 @@ class StructuredRunMixin:
         Args:
             tag_name (:obj:`str`): :obj:`name` of tag to be removed.
         """
-        return self.props.remove_tag(tag_name)
+        result = self.props.remove_tag(tag_name)
+        self._mirror_prop('tags', self.props.tags)
+        return result
 
 
 class BasicRun(BaseRun, StructuredRunMixin):
@@ -324,7 +350,9 @@ class BasicRun(BaseRun, StructuredRunMixin):
                 # no run params are set. use empty dict
                 self[...] = {}
             self.meta_run_tree['end_time'] = None
-            self.props
+            self.props  # ensure structured DB entry exists
+            # Mirror created_at once at run creation so sync-from-s3 can restore it.
+            self._mirror_prop('created_at', self.props.creation_time)
         if experiment:
             self.experiment = experiment
 

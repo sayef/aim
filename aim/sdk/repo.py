@@ -164,6 +164,63 @@ class Repo:
 
         self._resources = RepoAutoClean(self)
 
+    def _bootstrap_from_s3_if_empty(self):
+        """Restore run inventory from S3 when the local repo has no runs.
+
+        When S3 sync is configured (via ``litewave.active_config`` or
+        ``LITEWAVE_*`` env vars) and the local ``meta/chunks/`` directory is
+        absent or empty, this method:
+
+        1. Lists run hashes present in S3 under the configured prefix.
+        2. Creates the local ``meta/chunks/<hash>`` directory for each so aim's
+           ``_all_run_hashes()`` (which uses ``os.listdir``) can find them.
+        3. Registers each run in the structured DB (``run_metadata.sqlite``) so
+           the web UI's run list is populated immediately.
+        4. Indexes each run: ``LiteContainer`` merge-on-open pulls the run's
+           segments from S3, and the index is rebuilt from that data.
+
+        This is a no-op when S3 is not configured or local runs already exist.
+        """
+        from aim import litewave
+
+        cfg = litewave.active_config.get()
+        if cfg is None:
+            # Try env-based config; skip entirely if no bucket is configured.
+            cfg = litewave.S3Config.from_env()
+        if not cfg.enabled:
+            return
+
+        chunks_dir = os.path.join(self.path, 'meta', 'chunks')
+        local_hashes = set(os.listdir(chunks_dir)) if os.path.exists(chunks_dir) else set()
+        if local_hashes:
+            return  # repo already has local runs — nothing to bootstrap
+
+        s3_hashes = litewave.list_run_hashes(cfg, aim_path=self.path)
+        if not s3_hashes:
+            return
+
+        logger.info(f'Bootstrapping {len(s3_hashes)} run(s) from S3 into local repo.')
+
+        os.makedirs(chunks_dir, exist_ok=True)
+        for run_hash in s3_hashes:
+            # Create the local directory entry so _all_run_hashes() sees it.
+            os.makedirs(os.path.join(chunks_dir, run_hash), exist_ok=True)
+
+            # Register in structured DB if not already there.
+            if not self.structured_db.find_run(run_hash):
+                with self.structured_db:
+                    self.structured_db.create_run(run_hash)
+
+        # Rebuild the meta/index container from the per-run containers (which
+        # litewave fills via merge-on-open from S3).
+        from aim.sdk.index_manager import RepoIndexManager
+        index_manager = RepoIndexManager.get_index_manager(self)
+        for run_hash in s3_hashes:
+            try:
+                index_manager.index(run_hash)
+            except Exception as exc:
+                logger.warning(f'Failed to index run {run_hash} during S3 bootstrap: {exc}')
+
     @property
     def meta_tree(self):
         return self.request_tree('meta', read_only=True).subtree('meta')

@@ -21,12 +21,27 @@ __all__ = [
     'S3Config',
     'ActiveConfig',
     'active_config',
+    'list_run_hashes',
     'Iterator',
     'BaseIterator',
     'KeysIterator',
     'ValuesIterator',
     'ItemsIterator',
 ]
+
+
+def list_run_hashes(config: Optional[S3Config] = None, aim_path: str = '.aim') -> list:
+    """List run hashes flushed to S3 for the given aim repo path.
+
+    ``aim_path`` is the local ``.aim`` directory; it is used to derive the
+    correct S3 key prefix via the same path-mapping logic that ``DB`` uses.
+    Returns an empty list when no S3 bucket is configured.
+    """
+    cfg = resolve_config(config)
+    if not cfg.enabled:
+        return []
+    from ._s3 import list_run_hashes as _list
+    return _list(cfg, aim_path)
 
 
 class Iterator:

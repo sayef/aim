@@ -174,5 +174,68 @@ class TestS3Store(unittest.TestCase):
         db2.close()
 
 
+    def test_list_run_hashes(self):
+        # Write two "runs" (aim-style paths: meta/chunks/<hash>) and flush.
+        hashes = ['abc123', 'def456']
+        aim_path = os.path.join(self.tmp, '.aim')
+        for run_hash in hashes:
+            path = os.path.join(aim_path, 'meta', 'chunks', run_hash)
+            db = self._open(path)
+            db.put(b'k', b'v')
+            db.flush()
+            db.close()
+
+        from aim.litewave import list_run_hashes
+        found = set(list_run_hashes(self.config, aim_path=aim_path))
+        self.assertEqual(found, set(hashes))
+
+    def test_list_run_hashes_empty(self):
+        from aim.litewave import list_run_hashes
+        aim_path = os.path.join(self.tmp, '.aim')
+        self.assertEqual(list_run_hashes(self.config, aim_path=aim_path), [])
+
+    def test_list_run_hashes_no_config(self):
+        from aim.litewave import list_run_hashes, S3Config
+        # No bucket -> always returns empty list, never touches S3.
+        self.assertEqual(list_run_hashes(S3Config(), aim_path=self.tmp), [])
+
+    def test_props_round_trip_through_s3(self):
+        """__props__ keys written by aim's _mirror_prop survive S3 flush + wipe + reopen."""
+        import json, shutil
+
+        aim_path = os.path.join(self.tmp, '.aim')
+        run_hash = 'deadbeef01234567'
+        db_path = os.path.join(aim_path, 'meta', 'chunks', run_hash)
+
+        # --- write phase: simulate what aim's _mirror_prop does ---
+        # aim encodes keys as bytes via its treeview; at the litewave level the
+        # props subtree is just regular key/value pairs.  We write them directly
+        # so this test has no aim dependency.
+        props = {
+            'name':        'my-experiment-run',
+            'experiment':  'ranking-eval',
+            'description': 'test run description',
+            'archived':    False,
+            'tags':        ['tag-a', 'tag-b'],
+            'created_at':  1700000000.0,
+        }
+        db = self._open(db_path)
+        for k, v in props.items():
+            db.put(f'__props__/{k}'.encode(), json.dumps(v).encode())
+        db.flush()
+        db.close()
+
+        # --- wipe local dir entirely, simulating a fresh machine ---
+        shutil.rmtree(db_path)
+
+        # --- reopen: litewave merge-on-open pulls segments from S3 ---
+        db2 = self._open(db_path, read_only=True)
+        for k, expected in props.items():
+            raw = db2.get(f'__props__/{k}'.encode())
+            self.assertIsNotNone(raw, msg=f'__props__/{k} missing after S3 round-trip')
+            self.assertEqual(json.loads(raw), expected, msg=f'__props__/{k} value mismatch')
+        db2.close()
+
+
 if __name__ == '__main__':
     unittest.main()
